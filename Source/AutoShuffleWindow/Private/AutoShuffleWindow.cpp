@@ -358,8 +358,21 @@ void FAutoShuffleWindowModule::ReadGenerateConfigImplementation()
         UE_LOG(LogTemp, Warning, TEXT("Failed to get names array."));
     }
 
-}
+    // Load height for each level in shelf 
+    TArray<float> ShelfBaseHeight;
+    if (!GenConfigJson->HasField("Shelfbase")) {
+        UE_LOG(LogTemp, Warning, TEXT("No field NumLevels."));
+        return;
+    } else {
+        TArray<TSharedPtr<FJsonValue>> Shelfbase = GenConfigJson->GetArrayField("Shelfbase");
+        for (auto BaseValueIt = Shelfbase.CreateIterator(); BaseValueIt; ++BaseValueIt)
+        {
+            ShelfBaseHeight.Add((*BaseValueIt)->AsNumber());
+        }
+        FAutoShuffleWindowModule::RandomArrange(FVector2D(), FVector2D(), ShelfBaseHeight);
+    }
 
+}
 
 void FAutoShuffleWindowModule::LoadMesh(const FString &ObjectName, const FString &MeshPath, const int InstanceNum)
 {
@@ -368,8 +381,6 @@ void FAutoShuffleWindowModule::LoadMesh(const FString &ObjectName, const FString
 		UE_LOG(LogTemp, Log, TEXT("Failed to get world"));
 	}
 	
-    TArray<AStaticMeshActor*> MeshActorArray;
-
     FActorSpawnParameters SpawnParams;
 
 	UStaticMesh* MeshAsset = Cast<UStaticMesh>(StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *MeshPath));
@@ -380,11 +391,57 @@ void FAutoShuffleWindowModule::LoadMesh(const FString &ObjectName, const FString
     for (int i = 0; i < InstanceNum; i++) {
         SpawnParams.Name = FName(*(ObjectName + FString::FromInt(i)));
         FRotator Rotation(0.0f, 0.0f, 0.0f);
-        FVector Location(0.0f, 0.0f, 20.0f*i);
+        FVector Location(0.0f, 0.0f, 0.0f);
         MeshActorArray.Emplace(WorldPtr->SpawnActor<AStaticMeshActor>(AStaticMeshActor::StaticClass(), Location, Rotation, SpawnParams));
         MeshActorArray[i]->SetActorLabel(ObjectName + FString::FromInt(i), false);
         MeshActorArray[i]->GetStaticMeshComponent()->SetStaticMesh(MeshAsset);
 	}
+}
+
+void FAutoShuffleWindowModule::RandomArrange(const FVector2D &TopLeft, const FVector2D &HeightWidth, const TArray<float>& ShelfBase)
+{   
+    int MaxAttempts = 50;
+    float XRangeMin = TopLeft.X;
+    float XRangeMax = TopLeft.X + HeightWidth.X;
+    float YRangeMin = TopLeft.Y;
+    float YRangeMax = TopLeft.Y + HeightWidth.Y;
+
+    // Iterate in each level of shelf
+    for (int l = 0; l < ShelfBase.Num(); l++) {
+        int StartIdx = l * MeshActorArray.Num() / ShelfBase.Num();
+        int EndIdx = (l + 1) * MeshActorArray.Num() / ShelfBase.Num();
+        float CurrentZ = ShelfBase[l];
+
+        // First actor in each element can always be placed without collision
+        for (int j = StartIdx; j < EndIdx; j++) {
+            float BoundRadiusA, BoundHalfHeightA;
+            MeshActorArray[j]->GetComponentsBoundingCylinder(BoundRadiusA, BoundHalfHeightA, false);
+            MeshActorArray[j].SetLocation(FVector(FMath::RandRange(XRangeMin, XRangeMax), 
+                                                  FMath::RandRange(YRangeMin, YRangeMax), CurrentZ));
+
+            // Only need to check collision with actor been placed before
+            for (int i = StartIdx; i < j; i++) {
+                float BoundRadiusB, BoundHalfHeightB;
+                MeshActorArray[i]->GetComponentsBoundingCylinder(BoundRadiusB, BoundHalfHeightB, false);
+                FVector LocB =  MeshActorArray[i].GetLocation();
+
+                // Try limitted number to place without collision
+                for (int k = 0; k < MaxAttempts; k++) {
+                    float RandX = FMath::RandRange(XRangeMin, XRangeMax);
+                    float RandY = FMath::RandRange(YRangeMin, YRangeMax);
+                    float Distance = (LocB.X - RandX) * (LocB.X - RandX) + (LocB.Y - RandY) * (LocB.Y - RandY);
+                    if (Distance > BoundRadiusA + BoundRadiusB + 1.f) {
+                        MeshActorArray[j].SetLocation(FVector(RandX, RandY, CurrentZ));
+                        break;
+                    }
+                }
+
+            }
+
+        }
+
+    }
+
 }
 
 void FAutoShuffleWindowModule::AutoShuffleImplementation()
