@@ -21,6 +21,9 @@
 #include "Editor/UnrealEd/Private/GeomFitUtils.h"
 
 #include "Engine.h"
+/**the following header files for generate products*/
+#include "Runtime/Engine/Classes/Engine/StaticMeshActor.h"
+#include "Runtime/CoreUObject/Public/UObject/ConstructorHelpers.h"
 
 static const FName AutoShuffleWindowTabName("AutoShuffleWindow");
 
@@ -40,7 +43,7 @@ void FAutoShuffleWindowModule::StartupModule()
     
     FAutoShuffleWindowStyle::Initialize();
     FAutoShuffleWindowStyle::ReloadTextures();
-
+    
     FAutoShuffleWindowCommands::Register();
     
     PluginCommands = MakeShareable(new FUICommandList);
@@ -109,7 +112,12 @@ TSharedRef<SDockTab> FAutoShuffleWindowModule::OnSpawnPluginTab(const FSpawnTabA
 
     // set the region of the discarded products to origin
     DiscardedProductsRegions = FVector(0.f, 0.f, 0.f);
-    
+
+	TSharedRef<SButton> ReadGenConfigButton = SNew(SButton);
+	ReadGenConfigButton->SetVAlign(VAlign_Center);
+	ReadGenConfigButton->SetHAlign(HAlign_Center);
+	ReadGenConfigButton->SetContent(SNew(STextBlock).Text(FText::FromString(TEXT("Read Config and Load Meshes"))));
+
     TSharedRef<SButton> AutoShuffleButton = SNew(SButton);
     AutoShuffleButton->SetVAlign(VAlign_Center);
     AutoShuffleButton->SetHAlign(HAlign_Center);
@@ -135,6 +143,12 @@ TSharedRef<SDockTab> FAutoShuffleWindowModule::OnSpawnPluginTab(const FSpawnTabA
     ExportActorNameMappingButton->SetVAlign(VAlign_Center);
     ExportActorNameMappingButton->SetHAlign(HAlign_Center);
     ExportActorNameMappingButton->SetContent(SNew(STextBlock).Text(FText::FromString(TEXT("Export Actor Name Mapping"))));
+	
+	auto OnReadGenConfigButtonClickedLambda = []() -> FReply
+	{
+		ReadGenerateConfigImplementation();
+		return FReply::Handled();
+	};
 
     auto OnAutoShuffleButtonClickedLambda = []() -> FReply
     {
@@ -168,6 +182,7 @@ TSharedRef<SDockTab> FAutoShuffleWindowModule::OnSpawnPluginTab(const FSpawnTabA
         return FReply::Handled();
     };
     
+	ReadGenConfigButton->SetOnClicked(FOnClicked::CreateLambda(OnReadGenConfigButtonClickedLambda));
     AutoShuffleButton->SetOnClicked(FOnClicked::CreateLambda(OnAutoShuffleButtonClickedLambda));
     OcclusionVisibilityButton->SetOnClicked(FOnClicked::CreateLambda(OnOcclusionVisibilityButtonClickedLambda));
     BatchConvexDecompButton->SetOnClicked(FOnClicked::CreateLambda(OnBatchConvexDecompButtonClickedLambda));
@@ -226,6 +241,10 @@ TSharedRef<SDockTab> FAutoShuffleWindowModule::OnSpawnPluginTab(const FSpawnTabA
                 PerGroupCheckBox
             ]
         ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(30.f, 10.f)
+		[
+			ReadGenConfigButton
+		]
         + SVerticalBox::Slot().AutoHeight().Padding(30.f, 10.f)
         [
             AutoShuffleButton
@@ -291,6 +310,82 @@ bool FAutoShuffleWindowModule::bIsNonProductsVisible;
 
 // the rendering device: a very big two-dimensional tarray of index of actors, and depth
 TArray<class FOcclusionPixel> FAutoShuffleWindowModule::RenderingDevice[OCCLUSION_VISIBILITY_RESOLUTION_HEIGHT][OCCLUSION_VISIBILITY_RESOLUTION_WIDTH];
+
+
+/*Read a json configuration file*/
+void FAutoShuffleWindowModule::ReadGenerateConfigImplementation()
+{	
+	
+	FString PluginDir = FPaths::Combine(*FPaths::GamePluginsDir(), TEXT("SupermarketPlugin-AutoShuffleWindow"));
+	FString ResourseDir = FPaths::Combine(*PluginDir, TEXT("Resources"));
+	FString FileDir = FPaths::Combine(*ResourseDir, TEXT("exfile.json"));
+    UE_LOG(LogTemp, Log, TEXT("current file is %s"), *FileDir);
+	FString Filedata = "";
+	FFileHelper::LoadFileToString(Filedata, *FileDir);
+	TSharedPtr<FJsonObject> GenConfigJson = FAutoShuffleWindowModule::ParseJSON(Filedata, TEXT("exfile"), false);
+	
+    {
+        if (!GenConfigJson.IsValid())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Invalid json file."));
+            return;
+        }
+        if (!GenConfigJson->HasField("ObjectNames"))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("No field ObjectNames."));
+            return;
+        }
+    }
+    TArray<FString> ObjectNamesArray;
+
+    if (GenConfigJson->TryGetStringArrayField("ObjectNames", ObjectNamesArray)) {
+        UE_LOG(LogTemp, Log, TEXT("Reading Objects..."));
+        for (int i = 0; i < ObjectNamesArray.Num(); i++) {
+            TSharedPtr<FJsonObject> ActorJson = GenConfigJson->GetObjectField(ObjectNamesArray[i]);
+            if (!ActorJson->HasField("InstanceNum")) {
+                UE_LOG(LogTemp, Warning, TEXT("InstanceNum not set"));
+                return;
+            }
+            if (!ActorJson->HasField("MeshPath")) {
+                UE_LOG(LogTemp, Warning, TEXT("MeshPath not set"));
+                return;
+            }
+            int InstanceNum = ActorJson->GetNumberField("InstanceNum");
+            FString MeshPath = ActorJson->GetStringField("MeshPath");
+            FAutoShuffleWindowModule::LoadMesh(ObjectNamesArray[i], MeshPath, InstanceNum);
+        }
+    } else {
+        UE_LOG(LogTemp, Warning, TEXT("Failed to get names array."));
+    }
+
+}
+
+
+void FAutoShuffleWindowModule::LoadMesh(const FString &ObjectName, const FString &MeshPath, const int InstanceNum)
+{
+    UWorld* WorldPtr = GEditor->GetEditorWorldContext().World();
+	if (WorldPtr == nullptr) {
+		UE_LOG(LogTemp, Log, TEXT("Failed to get world"));
+	}
+	
+    TArray<AStaticMeshActor*> MeshActorArray;
+
+    FActorSpawnParameters SpawnParams;
+
+	UStaticMesh* MeshAsset = Cast<UStaticMesh>(StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *MeshPath));
+    if (MeshAsset == nullptr) {
+        UE_LOG(LogTemp, Error, TEXT("faild to load mesh!"));
+        return;
+    }    
+    for (int i = 0; i < InstanceNum; i++) {
+        SpawnParams.Name = FName(*(ObjectName + FString::FromInt(i)));
+        FRotator Rotation(0.0f, 0.0f, 0.0f);
+        FVector Location(0.0f, 0.0f, 20.0f*i);
+        MeshActorArray.Emplace(WorldPtr->SpawnActor<AStaticMeshActor>(AStaticMeshActor::StaticClass(), Location, Rotation, SpawnParams));
+        MeshActorArray[i]->SetActorLabel(ObjectName + FString::FromInt(i), false);
+        MeshActorArray[i]->GetStaticMeshComponent()->SetStaticMesh(MeshAsset);
+	}
+}
 
 void FAutoShuffleWindowModule::AutoShuffleImplementation()
 {
@@ -602,7 +697,9 @@ void FAutoShuffleWindowModule::BatchConvexDecomposition()
                 DecomposeMeshToHulls(BodySetup, Verts, CollidingIndices, InAccuracy, InMaxHullVerts);
             }
             // refresh collision change back to static mesh components
-            RefreshCollisionChange(StaticMeshActor->GetStaticMeshComponent()->GetStaticMesh());
+            //RefreshCollisionChange(StaticMeshActor->GetStaticMeshComponent()->GetStaticMesh());
+			UStaticMesh *tmp_mesh = StaticMeshActor->GetStaticMeshComponent()->GetStaticMesh();
+			RefreshCollisionChange(*tmp_mesh);
             // mark mesh as dirty
             StaticMeshActor->GetStaticMeshComponent()->GetStaticMesh()->MarkPackageDirty();
             // mark the static mesh for collision customization
@@ -681,9 +778,9 @@ bool FAutoShuffleWindowModule::ReadWhitelist()
         FURL URL;
         EditorWorld->InitializeActorsForPlay(URL);
     }
-    FString PluginDir = FPaths::Combine(*FPaths::GamePluginsDir(), TEXT("AutoShuffleWindow"));
-    FString ResourseDir = FPaths::Combine(*PluginDir, TEXT("Resources"));
     FString PluginDir = FPaths::Combine(*FPaths::GamePluginsDir(), TEXT("SupermarketPlugin-AutoShuffleWindow"));
+    FString ResourseDir = FPaths::Combine(*PluginDir, TEXT("Resources"));
+    FString FileDir = FPaths::Combine(*ResourseDir, TEXT("Whitelist.json"));
     FString Filedata = "";
     FFileHelper::LoadFileToString(Filedata, *FileDir);
     TSharedPtr<FJsonObject> WhitelistJson = FAutoShuffleWindowModule::ParseJSON(Filedata, TEXT("Whitelist"), false);

@@ -40,6 +40,12 @@ private:
 
 /** The following are the implementations of the auto shuffle */
 private:
+	/**The main entry of reading config for products generation*/
+	static void ReadGenerateConfigImplementation();
+
+    /**The main entry to load mesh given Json config*/
+	static void LoadMesh(const FString &ObjectName, const FString &MeshPath, const int InstanceNum);
+
     /** The main entry of the algorithm */
     static void AutoShuffleImplementation();
 
@@ -61,7 +67,7 @@ private:
 
     /** Check box for toggling product organizing */
     static TSharedRef<SCheckBox> OrganizeCheckBox;
-
+    
     /** The status of the organize checkbox when button clicked */
     static bool bIsOrganizeChecked;
 
