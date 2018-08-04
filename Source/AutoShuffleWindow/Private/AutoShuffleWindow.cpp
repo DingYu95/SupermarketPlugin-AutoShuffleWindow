@@ -683,7 +683,7 @@ bool FAutoShuffleWindowModule::ReadWhitelist()
     }
     FString PluginDir = FPaths::Combine(*FPaths::GamePluginsDir(), TEXT("AutoShuffleWindow"));
     FString ResourseDir = FPaths::Combine(*PluginDir, TEXT("Resources"));
-    FString FileDir = FPaths::Combine(*ResourseDir, TEXT("Whitelist.json"));
+    FString PluginDir = FPaths::Combine(*FPaths::GamePluginsDir(), TEXT("SupermarketPlugin-AutoShuffleWindow"));
     FString Filedata = "";
     FFileHelper::LoadFileToString(Filedata, *FileDir);
     TSharedPtr<FJsonObject> WhitelistJson = FAutoShuffleWindowModule::ParseJSON(Filedata, TEXT("Whitelist"), false);
